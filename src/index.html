@@ -1,0 +1,1265 @@
+<html>
+
+<head>
+  <title>Web3 Metamask Login</title>
+  <link href="https://unpkg.com/tailwindcss@^2/dist/tailwind.min.css" rel="stylesheet">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+
+<body class="flex w-full h-full justify-center items-center">
+  <div id="spinner"></div> 
+  <div class="flex-col space-y-2 justify-center items-center">
+    <button id='loginButton' onclick="" class="mx-auto rounded-md p-2 bg-purple-500 text-white">
+      Login with MetaMask
+    </button>
+    <br/>
+    Metamask Wallet: <p id='userWallet' class='text-lg text-gray-600 my-2'></p>
+    Klaster Wallet: <p id='klasterWallet' class='text-lg text-gray-600 my-2'></p><br />
+    <table>
+      <tr>1. Send Token</tr>
+      <tr>
+        <td><input id="chainId" type="text" value="" onchange="updateTokenBalance()" placeholder="chainId" style="border: 3px solid #555"></td>
+        <td><input id="tokenAddy" type="text" value="" onchange="updateTokenBalance()" placeholder="tokenAddy" style="border: 3px solid #555"></td>
+      </tr>
+    </table>
+    <p id="sendTokenBalance">Send Token Balance</p>
+
+    <br />
+    <table>
+      <tr>2. To Wallet</tr>
+      <tr>
+        <td><input id="destinationAddy" type="text" value="" placeholder="desinationAddy" style="border: 3px solid #555"></td>
+      </tr>
+    </table>
+    <br />
+    <table>
+      <tr>3. Amount</tr>
+      <tr>
+        <td><input id="amount" type="text" value="" placeholder="amount (wei)" style="border: 3px solid #555"></td>
+      </tr>
+    </table>
+    <br />
+    <table>
+      <tr>3. And Pay With</tr>
+      <tr>
+        <td><input id="paymentChainId" type="text" value="" onchange="updatePaymentTokenBalance()" placeholder="paymentChainId" style="border: 3px solid #555"></td>
+        <td><input id="paymentTokenAddy" type="text" value="" onchange="updatePaymentTokenBalance()" placeholder="paymentTokenAddy" style="border: 3px solid #555"></td>
+      </tr>
+    </table>
+    <p id="paymentTokenBalance">Payment Token Balance</p>
+    <button id='executeButton' onclick="execute()" class="mx-auto rounded-md p-2 bg-purple-500 text-white">
+      Execute
+    </button>
+  </div>
+
+
+
+  <script src="https://cdn.ethers.io/lib/ethers-5.2.umd.min.js"
+        type="application/javascript"></script>
+
+  <script>
+    window.userWalletAddress = null
+    const loginButton = document.getElementById('loginButton')
+    const userWallet = document.getElementById('userWallet')
+    const klasterWalletField = document.getElementById('klasterWallet')
+
+    const chainIdField = document.getElementById('chainId')
+    const tokenAddyField = document.getElementById('tokenAddy')
+    const paymentChainIdField = document.getElementById('paymentChainId')
+    const paymentTokenAddyField = document.getElementById('paymentTokenAddy')
+
+    const tokenBalanceField = document.getElementById('sendTokenBalance');
+    tokenBalanceField.style.display = "none";
+    const paymentTokenBalanceField = document.getElementById('paymentTokenBalance');
+    paymentTokenBalanceField.style.display = "none";
+
+    const destinationAddyField = document.getElementById('destinationAddy');
+    const amountField = document.getElementById('amount');
+
+    const spinner = document.getElementById("spinner");
+
+    function showSpinner() {
+      spinner.className = "show";
+      setTimeout(() => {
+        spinner.className = spinner.className.replace("show", "");
+      }, 30000);
+    }
+
+    function hideSpinner() {
+      spinner.className = spinner.className.replace("show", "");
+    }
+    
+    async function execute() {
+      showSpinner()
+      const chainId = chainIdField.value;
+      const token = tokenAddyField.value;
+      const destination = destinationAddyField.value;
+      const amount = amountField.value;
+      const paymentChainId = paymentChainIdField.value;
+      const paymentToken = paymentTokenAddyField.value;
+
+      if (!chainId || !token || !destination | !amount || !paymentChainId || !paymentToken) { alert("some fields minssing!"); }
+      
+      const amountWei = ethers.utils.parseUnits(amount, 18);
+      const tokenInterface = new ethers.utils.Interface(window.tokenAbi);
+      const encodedData = tokenInterface.encodeFunctionData("transfer", [destination, amountWei]);
+
+      const quote = {
+        tx: {
+          masterWallet: window.userWalletAddress,
+          salt: "0",
+          destination: token,
+          value: "0",
+          data: encodedData,
+          extraData: "0x0000000000000000000000000000000000000000000000000000000000000000",
+          chainId: chainId
+        },
+        paymentInfo: {
+          salt: "0",
+          token: paymentToken,
+          chainId: paymentChainId
+        }
+      }
+
+      jQuery.ajax({
+        type: "POST",
+        url: "https://klaster-node.polycode.sh/quote",
+        data: JSON.stringify(quote),
+        contentType: "application/json; charset=utf-8",
+        complete: async function (data, status) {
+          hideSpinner();
+          if (status == "success") {
+            let quote = data.responseJSON;
+            let signature = await window.ethereum.request({ method: 'personal_sign', params: [quote.hash, window.userWalletAddress] });
+            quote.transactions["signature"] = (ethers.BigNumber.from(signature)).add(ethers.BigNumber.from("4")).toHexString();
+            jQuery.ajax({
+              type: "POST",
+              url: "https://klaster-node.polycode.sh/execute",
+              data: JSON.stringify(quote),
+              contentType: "application/json; charset=utf-8",
+              complete: async function (data, status) {
+                alert(data.responseJSON.hash);
+              }
+            })
+          } else {
+            alert("klaster quote request failed")
+          }
+        }
+      });
+    }
+
+    async function updateTokenBalance() {
+      console.log("chainId", chainIdField.value);
+      console.log("token", tokenAddyField.value);
+      const chainId = chainIdField.value;
+      const token = tokenAddyField.value;
+      if (!chainId || !token) {
+        return;
+      }
+
+      let tokenContract;
+      if (chainId == "42161") {
+        tokenContract = new ethers.Contract(token, window.tokenAbi, window.arbProvider);
+      } else if (chainId == "137") {
+        tokenContract = new ethers.Contract(token, window.tokenAbi, window.polygonProvider);
+        return;
+      } else if (chainId == "10") {
+        tokenContract = new ethers.Contract(token, window.tokenAbi, window.opProvider);
+      } else {
+        alert("invalid chain id, supported chains: 42161 (Arbitrum), 137 (Polygon), 10 (Optimism)");
+        return;
+      }
+      const balance = await tokenContract.balanceOf(window.klasterWalletAddress);
+      const tokenSymbol = await tokenContract.symbol();
+      const tokenDecimals = await tokenContract.decimals();
+      const balanceFormatted = ethers.utils.formatUnits(balance, tokenDecimals);
+
+      tokenBalanceField.innerText = `Balance: ${balanceFormatted} ${tokenSymbol}`;
+      tokenBalanceField.style.display = "block";
+    }
+
+    async function updatePaymentTokenBalance() {
+      console.log("chainId", paymentChainIdField.value);
+      console.log("token", paymentTokenAddyField.value);
+      const chainId = paymentChainIdField.value;
+      const token = paymentTokenAddyField.value;
+      if (!chainId || !token) {
+        return;
+      }
+
+      let tokenContract;
+      if (chainId == "42161") {
+        tokenContract = new ethers.Contract(token, window.tokenAbi, window.arbProvider);
+      } else if (chainId == "137") {
+        tokenContract = new ethers.Contract(token, window.tokenAbi, window.polygonProvider);
+      } else if (chainId == "10") {
+        tokenContract = new ethers.Contract(token, window.tokenAbi, window.opProvider);
+      } else {
+        alert("invalid chain id, supported chains: 42161 (Arbitrum), 137 (Polygon)");
+        return;
+      }
+      const balance = await tokenContract.balanceOf(window.klasterWalletAddress);
+      const tokenSymbol = await tokenContract.symbol();
+      const tokenDecimals = await tokenContract.decimals();
+      const balanceFormatted = ethers.utils.formatUnits(balance, tokenDecimals);
+
+      paymentTokenBalanceField.innerText = `Balance: ${balanceFormatted} ${tokenSymbol}`;
+      paymentTokenBalanceField.style.display = "block";
+    }
+
+    function toggleButton() {
+      if (!window.ethereum) {
+        loginButton.innerText = 'MetaMask is not installed'
+        loginButton.classList.remove('bg-purple-500', 'text-white')
+        loginButton.classList.add('bg-gray-500', 'text-gray-100', 'cursor-not-allowed')
+        return false
+      }
+
+      loginButton.addEventListener('click', loginWithMetaMask)
+    }
+
+    async function loginWithMetaMask() {
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+        .catch((e) => {
+          console.error(e.message)
+          return
+        })
+      if (!accounts) { return }
+
+      const abi = [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "masterWallet",
+          "type": "address"
+        },
+        {
+          "internalType": "string[]",
+          "name": "salt",
+          "type": "string[]"
+        },
+        {
+          "internalType": "address[]",
+          "name": "destination",
+          "type": "address[]"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "value",
+          "type": "uint256[]"
+        },
+        {
+          "internalType": "bytes[]",
+          "name": "data",
+          "type": "bytes[]"
+        },
+        {
+          "internalType": "bytes32[]",
+          "name": "extraData",
+          "type": "bytes32[]"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "nonce",
+          "type": "uint256[]"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "chainId",
+          "type": "uint256[]"
+        },
+        {
+          "internalType": "bytes",
+          "name": "signatures",
+          "type": "bytes"
+        }
+      ],
+      "name": "batchExecute",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "internalType": "bytes32",
+              "name": "messageId",
+              "type": "bytes32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "sourceChainSelector",
+              "type": "uint64"
+            },
+            {
+              "internalType": "bytes",
+              "name": "sender",
+              "type": "bytes"
+            },
+            {
+              "internalType": "bytes",
+              "name": "data",
+              "type": "bytes"
+            },
+            {
+              "components": [
+                {
+                  "internalType": "address",
+                  "name": "token",
+                  "type": "address"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "amount",
+                  "type": "uint256"
+                }
+              ],
+              "internalType": "struct Client.EVMTokenAmount[]",
+              "name": "destTokenAmounts",
+              "type": "tuple[]"
+            }
+          ],
+          "internalType": "struct Client.Any2EVMMessage",
+          "name": "message",
+          "type": "tuple"
+        }
+      ],
+      "name": "ccipReceive",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "masterWallet",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "salt",
+          "type": "string"
+        }
+      ],
+      "name": "deploy",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "masterWallet",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "salt",
+          "type": "string"
+        },
+        {
+          "internalType": "address",
+          "name": "destination",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "value",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "extraData",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "chainId",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes",
+          "name": "signatures",
+          "type": "bytes"
+        }
+      ],
+      "name": "execute",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "result",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_sourceRouter",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "_thisChainSelector",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "router",
+          "type": "address"
+        }
+      ],
+      "name": "InvalidRouter",
+      "type": "error"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "masterWallet",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "subaccount",
+          "type": "address"
+        }
+      ],
+      "name": "ExecuteTransaction",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "safeAddress",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64[]",
+          "name": "relayChainSelectors",
+          "type": "uint64[]"
+        },
+        {
+          "internalType": "uint64[]",
+          "name": "destChainSelectors",
+          "type": "uint64[]"
+        },
+        {
+          "internalType": "uint256",
+          "name": "gasLimit",
+          "type": "uint256"
+        }
+      ],
+      "name": "syncSafeState",
+      "outputs": [],
+      "stateMutability": "payable",
+      "type": "function"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "masterWallet",
+          "type": "address"
+        }
+      ],
+      "name": "SyncSafeState",
+      "type": "event"
+    },
+    {
+      "stateMutability": "payable",
+      "type": "receive"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes",
+          "name": "signatures",
+          "type": "bytes"
+        },
+        {
+          "internalType": "uint256",
+          "name": "pos",
+          "type": "uint256"
+        }
+      ],
+      "name": "_signatureSplit",
+      "outputs": [
+        {
+          "internalType": "uint8",
+          "name": "v",
+          "type": "uint8"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "r",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "s",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "salt",
+          "type": "string"
+        }
+      ],
+      "name": "calculateAddress",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "salt",
+          "type": "string"
+        },
+        {
+          "internalType": "bytes",
+          "name": "byteCode",
+          "type": "bytes"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "create2Salt",
+          "type": "bytes32"
+        }
+      ],
+      "name": "calculateCreate2Address",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "safeAddress",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64[]",
+          "name": "relayChainSelectors",
+          "type": "uint64[]"
+        },
+        {
+          "internalType": "uint64[]",
+          "name": "destChainSelectors",
+          "type": "uint64[]"
+        },
+        {
+          "internalType": "uint256",
+          "name": "gasLimit",
+          "type": "uint256"
+        }
+      ],
+      "name": "calculateSyncSafeStateFee",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "totalFee",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "masterWallet",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "dataHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes",
+          "name": "signatures",
+          "type": "bytes"
+        }
+      ],
+      "name": "checkSignatures",
+      "outputs": [],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "controllingChains",
+      "outputs": [
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "controllingOwners",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "controllingThresholds",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "deployed",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "domainSeparator",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "masterWallet",
+          "type": "address"
+        },
+        {
+          "internalType": "string[]",
+          "name": "salt",
+          "type": "string[]"
+        },
+        {
+          "internalType": "address[]",
+          "name": "to",
+          "type": "address[]"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "value",
+          "type": "uint256[]"
+        },
+        {
+          "internalType": "bytes[]",
+          "name": "data",
+          "type": "bytes[]"
+        },
+        {
+          "internalType": "bytes32[]",
+          "name": "extraData",
+          "type": "bytes32[]"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "nonce",
+          "type": "uint256[]"
+        },
+        {
+          "internalType": "uint256[]",
+          "name": "chainId",
+          "type": "uint256[]"
+        }
+      ],
+      "name": "getBatchTransactionHash",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "calculatedHash",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        }
+      ],
+      "name": "getDeployedWallets",
+      "outputs": [
+        {
+          "internalType": "address[]",
+          "name": "",
+          "type": "address[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getRouter",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "masterWallet",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "salt",
+          "type": "string"
+        },
+        {
+          "internalType": "address",
+          "name": "to",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "value",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bytes",
+          "name": "data",
+          "type": "bytes"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "extraData",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "nonce",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "chainId",
+          "type": "uint256"
+        }
+      ],
+      "name": "getTransactionHash",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "instances",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "masters",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "nonces",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "salts",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes4",
+          "name": "interfaceId",
+          "type": "bytes4"
+        }
+      ],
+      "name": "supportsInterface",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "thisChainSelector",
+      "outputs": [
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ];
+      window.tokenAbi = [
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "name",
+        "outputs": [
+            {
+                "name": "",
+                "type": "string"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "_spender",
+                "type": "address"
+            },
+            {
+                "name": "_value",
+                "type": "uint256"
+            }
+        ],
+        "name": "approve",
+        "outputs": [
+            {
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "totalSupply",
+        "outputs": [
+            {
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "_from",
+                "type": "address"
+            },
+            {
+                "name": "_to",
+                "type": "address"
+            },
+            {
+                "name": "_value",
+                "type": "uint256"
+            }
+        ],
+        "name": "transferFrom",
+        "outputs": [
+            {
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [
+            {
+                "name": "",
+                "type": "uint8"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [
+            {
+                "name": "_owner",
+                "type": "address"
+            }
+        ],
+        "name": "balanceOf",
+        "outputs": [
+            {
+                "name": "balance",
+                "type": "uint256"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "symbol",
+        "outputs": [
+            {
+                "name": "",
+                "type": "string"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "_to",
+                "type": "address"
+            },
+            {
+                "name": "_value",
+                "type": "uint256"
+            }
+        ],
+        "name": "transfer",
+        "outputs": [
+            {
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [
+            {
+                "name": "_owner",
+                "type": "address"
+            },
+            {
+                "name": "_spender",
+                "type": "address"
+            }
+        ],
+        "name": "allowance",
+        "outputs": [
+            {
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "payable": true,
+        "stateMutability": "payable",
+        "type": "fallback"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "name": "owner",
+                "type": "address"
+            },
+            {
+                "indexed": true,
+                "name": "spender",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "name": "value",
+                "type": "uint256"
+            }
+        ],
+        "name": "Approval",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "name": "from",
+                "type": "address"
+            },
+            {
+                "indexed": true,
+                "name": "to",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "name": "value",
+                "type": "uint256"
+            }
+        ],
+        "name": "Transfer",
+        "type": "event"
+    }
+]
+    
+      const opProvider = new ethers.providers.JsonRpcProvider("https://mainnet.optimism.io");
+      const arbProvider = new ethers.providers.JsonRpcProvider("https://arbitrum.llamarpc.com");
+      const polygonProvider = new ethers.providers.JsonRpcProvider("https://polygon-rpc.com/");
+      const klasterSingleton = new ethers.Contract("0xddec9abbf919896885dbe8db884da29d2fde9a68", abi, opProvider);
+      const klasterWalletAddress = await klasterSingleton.calculateAddress(accounts[0], "0");
+
+      window.userWalletAddress = accounts[0];
+      window.klasterWalletAddress = klasterWalletAddress;
+      window.klasterSingleton = klasterSingleton;
+      window.opProvider = opProvider;
+      window.arbProvider = arbProvider;
+      window.polygonProvider = polygonProvider;
+
+      userWallet.innerText = window.userWalletAddress
+      klasterWalletField.innerText = window.klasterWalletAddress
+      loginButton.innerText = 'Sign out of MetaMask'
+      
+      loginButton.removeEventListener('click', loginWithMetaMask)
+      setTimeout(() => {
+        loginButton.addEventListener('click', signOutOfMetaMask)
+      }, 200)
+    }
+
+    function signOutOfMetaMask() {
+      window.userWalletAddress = null
+      userWallet.innerText = ''
+      loginButton.innerText = 'Sign in with MetaMask'
+
+      loginButton.removeEventListener('click', signOutOfMetaMask)
+      setTimeout(() => {
+        loginButton.addEventListener('click', loginWithMetaMask)
+      }, 200)
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      toggleButton()
+    });
+  </script>
+</body>
+
+</html>
